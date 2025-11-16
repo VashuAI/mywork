@@ -1,0 +1,38 @@
+add_action('woocommerce_after_order_itemmeta', 'mbp_display_booking_details_in_admin1', 10, 3);
+function mbp_display_booking_details_in_admin1($item_id, $item, $product) {
+    
+    // Time Slot - aapke system ke according
+    if ($time_slot = $item->get_meta('Time Slot')) {
+        echo '<div><strong>' . __('Time Slot') . ':</strong> ' . esc_html($time_slot) . '</div>';
+    }
+
+    // Adult Count
+    if ($adult_count = $item->get_meta('Adult Count')) {
+        echo '<div><strong>' . __('Adults') . ':</strong> ' . esc_html($adult_count) . '</div>';
+    }
+
+    // Child Count  
+    if ($child_count = $item->get_meta('Child Count')) {
+        echo '<div><strong>' . __('Children') . ':</strong> ' . esc_html($child_count) . '</div>';
+    }
+
+    // Infant Count
+    if ($infant_count = $item->get_meta('Infant Count')) {
+        echo '<div><strong>' . __('Infants') . ':</strong> ' . esc_html($infant_count) . '</div>';
+    }
+
+    // Booking Date
+    if ($booking_date = $item->get_meta('Booking Date')) {
+        echo '<div><strong>' . __('Booking Date') . ':</strong> ' . esc_html($booking_date) . '</div>';
+    }
+    
+    // Language
+    if ($language = $item->get_meta('Language')) {
+        echo '<div><strong>' . __('Language') . ':</strong> ' . esc_html($language) . '</div>';
+    }
+    
+    // Calculated Price
+    if ($calculated_price = $item->get_meta('Calculated Price')) {
+        echo '<div><strong>' . __('Calculated Price') . ':</strong> ' . wc_price($calculated_price) . '</div>';
+    }
+}
