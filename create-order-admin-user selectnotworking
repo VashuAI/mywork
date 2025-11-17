@@ -1,0 +1,679 @@
+<?php
+// admin/admin-booking-creator.php
+
+/**
+ * Admin Booking Creator
+ * Allows admin to manually create bookings
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class AdminBookingCreator {
+    
+    public function __construct() {
+        add_action('admin_menu', array($this, 'add_admin_menu'));
+        add_action('admin_init', array($this, 'handle_booking_creation'));
+        add_action('wp_ajax_get_product_variations', array($this, 'get_product_variations_ajax'));
+        add_action('wp_ajax_get_variation_details', array($this, 'get_variation_details_ajax'));
+    }
+    
+    public function add_admin_menu() {
+    add_menu_page(
+        'Create Booking',              // Page title
+        'Create Booking',              // Menu title
+        'manage_woocommerce',          // Capability
+        'admin-booking-creator',       // Menu slug
+        array($this, 'booking_creator_page'), // Callback
+        'dashicons-calendar-alt',      // Icon (change if you want)
+        55                             // Position (optional)
+    );
+}
+    
+    public function booking_creator_page() {
+        ?>
+        <div class="wrap">
+            <h1>Create New Booking</h1>
+            
+            <div class="card">
+                <div class="card-body">
+                    <form method="post" id="admin-booking-form">
+                        <?php wp_nonce_field('admin_create_booking', 'booking_nonce'); ?>
+                        
+                        <!-- Customer Selection -->
+                        <div class="form-section">
+                            <h3>Customer Information</h3>
+                            <div class="row">
+                                <div class="col-6">
+                                    <label for="customer_search">Select Customer:</label>
+                                    <select id="customer_search" name="customer_id" class="wc-customer-search" style="width:100%;" data-placeholder="Search customer...">
+                                        <option value="">Select Customer</option>
+                                    </select>
+                                </div>
+                                <div class="col-6">
+                                    <label>Or Create New Customer:</label>
+                                    <button type="button" class="button" id="create-new-customer">Create New Customer</button>
+                                </div>
+                            </div>
+                            
+                            <div id="new-customer-fields" style="display:none; margin-top:15px;">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <input type="text" name="new_customer_first_name" placeholder="First Name" class="form-control">
+                                    </div>
+                                    <div class="col-6">
+                                        <input type="text" name="new_customer_last_name" placeholder="Last Name" class="form-control">
+                                    </div>
+                                </div>
+                                <div class="row" style="margin-top:10px;">
+                                    <div class="col-6">
+                                        <input type="email" name="new_customer_email" placeholder="Email" class="form-control">
+                                    </div>
+                                    <div class="col-6">
+                                        <input type="tel" name="new_customer_phone" placeholder="Phone" class="form-control">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Product Selection -->
+                        <div class="form-section">
+                            <h3>Tour Selection</h3>
+                            <div class="row">
+                                <div class="col-6">
+                                    <label for="product_select">Select Tour:</label>
+                                    <select id="product_select" name="product_id" style="width:100%;">
+                                        <option value="">Select a tour</option>
+                                        <?php
+                                        $products = wc_get_products(array(
+                                            'type' => array('simple', 'variable'),
+                                            'limit' => -1,
+                                            'status' => 'publish'
+                                        ));
+                                        
+                                        foreach ($products as $product) {
+                                            echo '<option value="' . $product->get_id() . '">' . $product->get_name() . '</option>';
+                                        }
+                                        ?>
+                                    </select>
+                                </div>
+                                <div class="col-6">
+                                    <label for="variation_select">Tour Variation:</label>
+                                    <select id="variation_select" name="variation_id" style="width:100%;" disabled>
+                                        <option value="">Select variation</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Variation Details (Dynamic) -->
+                        <div id="variation-details" style="display:none; margin-top:20px; padding:15px; background:#f9f9f9; border-radius:5px;">
+                            <!-- Dynamic content from AJAX -->
+                        </div>
+                        
+                        <!-- Booking Details -->
+                        <div class="form-section">
+                            <h3>Booking Details</h3>
+                            <div class="row">
+                                <div class="col-4">
+                                    <label for="adult_count">Adults:</label>
+                                    <input type="number" id="adult_count" name="adult_count" value="1" min="1" class="form-control">
+                                </div>
+                                <div class="col-4">
+                                    <label for="child_count">Children:</label>
+                                    <input type="number" id="child_count" name="child_count" value="0" min="0" class="form-control">
+                                </div>
+                                <div class="col-4">
+                                    <label for="infant_count">Infants:</label>
+                                    <input type="number" id="infant_count" name="infant_count" value="0" min="0" class="form-control">
+                                </div>
+                            </div>
+                            
+                            <div class="row" style="margin-top:15px;">
+                                <div class="col-6">
+                                    <label for="booking_date">Booking Date:</label>
+                                    <input type="date" id="booking_date" name="booking_date" value="<?php echo date('Y-m-d'); ?>" class="form-control">
+                                </div>
+                                <div class="col-6">
+                                    <label for="time_slot">Time Slot:</label>
+                                    <select id="time_slot" name="time_slot" class="form-control" disabled>
+                                        <option value="">Select time slot</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="row" style="margin-top:15px;">
+                                <div class="col-6">
+                                    <label for="language">Language:</label>
+                                    <select id="language" name="language" class="form-control" disabled>
+                                        <option value="">Select language</option>
+                                    </select>
+                                </div>
+                                <div class="col-6">
+                                    <label for="booking_status">Booking Status:</label>
+                                    <select id="booking_status" name="booking_status" class="form-control">
+                                        <option value="pending">Pending</option>
+                                        <option value="confirmed">Confirmed</option>
+                                        <option value="completed">Completed</option>
+                                        <option value="cancelled">Cancelled</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Price Calculation -->
+                        <div class="form-section">
+                            <h3>Price Calculation</h3>
+                            <div id="price-calculation">
+                                <p>Select a tour variation to see price calculation</p>
+                            </div>
+                            
+                            <div class="row" style="margin-top:15px;">
+                                <div class="col-6">
+                                    <label for="final_price">Final Price:</label>
+                                    <input type="number" id="final_price" name="final_price" step="0.01" class="form-control" readonly>
+                                </div>
+                                <div class="col-6">
+                                    <label for="special_notes">Special Notes:</label>
+                                    <textarea id="special_notes" name="special_notes" class="form-control" rows="3" placeholder="Any special instructions..."></textarea>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="form-section" style="margin-top:30px;">
+                            <button type="submit" name="create_booking" class="button button-primary button-large">Create Booking</button>
+                            <button type="button" id="calculate-price" class="button button-secondary">Calculate Price</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <?php 
+        add_action('admin_enqueue_scripts', function($hook){
+            if ($hook !== 'toplevel_page_admin-booking-creator') {
+                return;
+            }
+
+            wp_enqueue_script('select2');
+            wp_enqueue_style('select2');
+
+            wp_enqueue_script('woocommerce_admin');
+            wp_enqueue_script('wc-admin-meta-boxes');
+            wp_enqueue_script('wc-customer-search');
+        });
+
+        ?>
+        
+        <style>
+            .form-section {
+                margin-bottom: 30px;
+                padding-bottom: 20px;
+                border-bottom: 1px solid #ddd;
+            }
+            .form-section h3 {
+                color: #2271b1;
+                margin-bottom: 15px;
+            }
+            .row {
+                display: flex;
+                gap: 15px;
+                margin-bottom: 10px;
+            }
+            .col-2 { flex: 2; }
+            .col-3 { flex: 3; }
+            .col-4 { flex: 4; }
+            .col-6 { flex: 6; }
+            .form-control {
+                width: 100%;
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+            }
+            .price-breakdown {
+                background: white;
+                padding: 15px;
+                border-radius: 5px;
+                border: 1px solid #ddd;
+            }
+        </style>
+        
+        <script>
+        jQuery(document).ready(function($) {
+            // Product selection change
+            $('#product_select').change(function() {
+                var productId = $(this).val();
+                if (productId) {
+                    $('#variation_select').prop('disabled', false);
+                    
+                    // Get variations via AJAX
+                    $.ajax({
+                        url: ajaxurl,
+                        type: 'POST',
+                        data: {
+                            action: 'get_product_variations',
+                            product_id: productId
+                        },
+                        success: function(response) {
+                            $('#variation_select').html(response);
+                        }
+                    });
+                } else {
+                    $('#variation_select').prop('disabled', true).html('<option value="">Select variation</option>');
+                    $('#variation-details').hide();
+                }
+            });
+            
+            // Variation selection change
+            $('#variation_select').change(function() {
+                var variationId = $(this).val();
+                if (variationId) {
+                    // Get variation details via AJAX
+                    $.ajax({
+                        url: ajaxurl,
+                        type: 'POST',
+                        data: {
+                            action: 'get_variation_details',
+                            variation_id: variationId,
+                            product_id: $('#product_select').val()
+                        },
+                        success: function(response) {
+                            $('#variation-details').html(response.data.details).show();
+                            $('#time_slot').html(response.data.time_slots).prop('disabled', false);
+                            $('#language').html(response.data.languages).prop('disabled', false);
+                            calculatePrice();
+                        }
+                    });
+                } else {
+                    $('#variation-details').hide();
+                    $('#time_slot, #language').prop('disabled', true);
+                }
+            });
+            
+            // Calculate price when participant counts change
+            $('#adult_count, #child_count, #infant_count, #booking_date, #time_slot, #language').change(function() {
+                calculatePrice();
+            });
+            
+            // Manual price calculation
+            $('#calculate-price').click(function() {
+                calculatePrice();
+            });
+            
+            // Create new customer toggle
+            $('#create-new-customer').click(function() {
+                $('#new-customer-fields').toggle();
+            });
+            
+            function calculatePrice() {
+                var variationId = $('#variation_select').val();
+                var adultCount = parseInt($('#adult_count').val()) || 0;
+                var childCount = parseInt($('#child_count').val()) || 0;
+                var infantCount = parseInt($('#infant_count').val()) || 0;
+                var bookingDate = $('#booking_date').val();
+                var language = $('#language').val();
+                
+                if (!variationId) return;
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'calculate_booking_price',
+                        variation_id: variationId,
+                        adult_count: adultCount,
+                        child_count: childCount,
+                        infant_count: infantCount,
+                        booking_date: bookingDate,
+                        language: language
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $('#price-calculation').html(response.data.calculation_html);
+                            $('#final_price').val(response.data.final_price);
+                        }
+                    }
+                });
+            }
+        });
+        </script>
+        <?php
+    }
+    
+    public function get_product_variations_ajax() {
+        $product_id = intval($_POST['product_id']);
+        $product = wc_get_product($product_id);
+        
+        if (!$product) {
+            wp_die();
+        }
+        
+        $html = '<option value="">Select variation</option>';
+        
+        if ($product->is_type('variable')) {
+            $variations = $product->get_available_variations();
+            foreach ($variations as $variation) {
+                $variation_obj = wc_get_product($variation['variation_id']);
+                $attributes = $variation_obj->get_attributes();
+                $variation_name = implode(', ', array_values($attributes));
+                
+                $html .= '<option value="' . $variation['variation_id'] . '">' . $variation_name . '</option>';
+            }
+        } else {
+            // Simple product
+            $html .= '<option value="' . $product_id . '">Standard</option>';
+        }
+        
+        echo $html;
+        wp_die();
+    }
+    
+    public function get_variation_details_ajax() {
+        $variation_id = intval($_POST['variation_id']);
+        $product_id = intval($_POST['product_id']);
+        
+        $variation = wc_get_product($variation_id);
+        $product = wc_get_product($product_id);
+        
+        $response = array(
+            'details' => '',
+            'time_slots' => '',
+            'languages' => ''
+        );
+        
+        if ($variation) {
+            // Variation details
+            $adult_price = get_post_meta($variation_id, '_adult_price', true) ?: 0;
+            $child_price = get_post_meta($variation_id, '_child_price', true) ?: 0;
+            $baby_price = get_post_meta($variation_id, '_baby_price', true) ?: 0;
+            $is_private = get_post_meta($variation_id, '_private', true) === 'yes';
+            $private_count = get_post_meta($variation_id, '_private_count', true) ?: 6;
+            
+            $response['details'] = '
+                <h4>Variation Details</h4>
+                <div class="row">
+                    <div class="col-6">
+                        <strong>Type:</strong> ' . ($is_private ? 'Private' : 'Shared') . '<br>
+                        <strong>Adult Price:</strong> ' . wc_price($adult_price) . '<br>
+                        <strong>Child Price:</strong> ' . wc_price($child_price) . '
+                    </div>
+                    <div class="col-6">
+                        <strong>Infant Price:</strong> ' . wc_price($baby_price) . '<br>
+                        ' . ($is_private ? '<strong>Private Group Size:</strong> ' . $private_count . '</div>' : '') . '
+                    </div>
+                </div>
+            ';
+            
+            // Time slots
+            $time_slots = get_post_meta($variation_id, '_time_set', true);
+            if ($time_slots) {
+                $time_slots = explode("\n", $time_slots);
+                $time_options = '<option value="">Select time slot</option>';
+                foreach ($time_slots as $slot) {
+                    $slot = trim($slot);
+                    if ($slot) {
+                        $time_options .= '<option value="' . esc_attr($slot) . '">' . esc_html($slot) . '</option>';
+                    }
+                }
+                $response['time_slots'] = $time_options;
+            }
+            
+            // Languages
+            $languages = get_post_meta($product_id, '_product_languages', true) ?: array();
+            $language_prices = get_post_meta($product_id, '_product_language_prices', true) ?: array();
+            
+            $language_options = '<option value="">Select language</option>';
+            foreach ($languages as $language) {
+                $extra_price = isset($language_prices[$language]) ? ' (+' . wc_price($language_prices[$language]) . ')' : '';
+                $language_options .= '<option value="' . esc_attr($language) . '">' . esc_html($language) . $extra_price . '</option>';
+            }
+            $response['languages'] = $language_options;
+        }
+        
+        wp_send_json_success($response);
+    }
+    
+    public function handle_booking_creation() {
+        if (!isset($_POST['create_booking']) || !wp_verify_nonce($_POST['booking_nonce'], 'admin_create_booking')) {
+            return;
+        }
+        
+        try {
+            // Validate data
+            $required_fields = array(
+                'product_id',
+                'variation_id', 
+                'adult_count',
+                'booking_date',
+                'time_slot',
+                'language'
+            );
+            
+            foreach ($required_fields as $field) {
+                if (empty($_POST[$field])) {
+                    throw new Exception("Please fill in all required fields: " . $field);
+                }
+            }
+            
+            // Get or create customer
+            $customer_id = $this->get_or_create_customer();
+            
+            // Create order
+            $order = wc_create_order(array(
+                'customer_id' => $customer_id,
+                'status' => sanitize_text_field($_POST['booking_status'])
+            ));
+            
+            if (is_wp_error($order)) {
+                throw new Exception('Could not create order: ' . $order->get_error_message());
+            }
+            
+            // Add product to order
+            $product_id = intval($_POST['product_id']);
+            $variation_id = intval($_POST['variation_id']);
+            $quantity = 1;
+            
+            // Calculate final price
+            $final_price = floatval($_POST['final_price']);
+            
+            // Add item to order
+            $product = wc_get_product($variation_id ?: $product_id);
+            $item_id = $order->add_product($product, $quantity, array(
+                'subtotal' => $final_price,
+                'total' => $final_price
+            ));
+            
+            // Add booking meta data
+            wc_add_order_item_meta($item_id, 'Adult Count', sanitize_text_field($_POST['adult_count']));
+            wc_add_order_item_meta($item_id, 'Child Count', sanitize_text_field($_POST['child_count']));
+            wc_add_order_item_meta($item_id, 'Infant Count', sanitize_text_field($_POST['infant_count']));
+            wc_add_order_item_meta($item_id, 'Booking Date', sanitize_text_field($_POST['booking_date']));
+            wc_add_order_item_meta($item_id, 'Time Slot', sanitize_text_field($_POST['time_slot']));
+            wc_add_order_item_meta($item_id, 'Language', sanitize_text_field($_POST['language']));
+            wc_add_order_item_meta($item_id, 'Calculated Price', $final_price);
+            
+            // Add order notes
+            if (!empty($_POST['special_notes'])) {
+                $order->add_order_note('Special instructions: ' . sanitize_textarea_field($_POST['special_notes']));
+            }
+            
+            $order->add_order_note('Booking created manually by admin');
+            
+            // Calculate totals and save
+            $order->calculate_totals();
+            $order->save();
+            
+            // Success message
+            add_action('admin_notices', function() use ($order) {
+                echo '<div class="notice notice-success is-dismissible">
+                    <p>Booking created successfully! Order #' . $order->get_id() . '</p>
+                    <p><a href="' . admin_url('post.php?post=' . $order->get_id() . '&action=edit') . '" class="button">View Order</a></p>
+                </div>';
+            });
+            
+        } catch (Exception $e) {
+            add_action('admin_notices', function() use ($e) {
+                echo '<div class="notice notice-error is-dismissible">
+                    <p>Error creating booking: ' . $e->getMessage() . '</p>
+                </div>';
+            });
+        }
+    }
+
+        
+    private function get_or_create_customer() {
+        // If existing customer selected
+        if (!empty($_POST['customer_id'])) {
+            return intval($_POST['customer_id']);
+        }
+        
+        // Create new customer
+        if (!empty($_POST['new_customer_email'])) {
+            $email = sanitize_email($_POST['new_customer_email']);
+            $first_name = sanitize_text_field($_POST['new_customer_first_name']);
+            $last_name = sanitize_text_field($_POST['new_customer_last_name']);
+            $phone = sanitize_text_field($_POST['new_customer_phone']);
+            
+            // Check if customer already exists
+            $customer = get_user_by('email', $email);
+            if ($customer) {
+                return $customer->ID;
+            }
+            
+            // Create new user
+            $username = $email;
+            $password = wp_generate_password();
+            
+            $user_id = wp_create_user($username, $password, $email);
+            
+            if (is_wp_error($user_id)) {
+                throw new Exception('Could not create customer: ' . $user_id->get_error_message());
+            }
+            
+            // Update user meta
+            wp_update_user(array(
+                'ID' => $user_id,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'display_name' => $first_name . ' ' . $last_name
+            ));
+            
+            update_user_meta($user_id, 'billing_phone', $phone);
+            update_user_meta($user_id, 'billing_first_name', $first_name);
+            update_user_meta($user_id, 'billing_last_name', $last_name);
+            update_user_meta($user_id, 'billing_email', $email);
+            
+            return $user_id;
+        }
+        
+        throw new Exception('Please select or create a customer');
+    }
+}
+
+new AdminBookingCreator();
+
+
+
+// Price calculation ke liye AJAX handler
+add_action('wp_ajax_calculate_booking_price', 'calculate_booking_price_ajax');
+
+function calculate_booking_price_ajax() {
+    $variation_id = intval($_POST['variation_id']);
+    $adult_count = intval($_POST['adult_count']);
+    $child_count = intval($_POST['child_count']); 
+    $infant_count = intval($_POST['infant_count']);
+    $booking_date = sanitize_text_field($_POST['booking_date']);
+    $language = sanitize_text_field($_POST['language']);
+    
+    $variation = wc_get_product($variation_id);
+    $product_id = $variation->get_parent_id();
+    
+    // Same pricing logic as frontend
+    $adult_price = get_post_meta($variation_id, '_adult_price', true) ?: 0;
+    $child_price = get_post_meta($variation_id, '_child_price', true) ?: 0;
+    $baby_price = get_post_meta($variation_id, '_baby_price', true) ?: 0;
+    $is_private = get_post_meta($variation_id, '_private', true) === 'yes';
+    $private_count = get_post_meta($variation_id, '_private_count', true) ?: 6;
+    
+    // Language price
+    $language_prices = get_post_meta($product_id, '_product_language_prices', true) ?: array();
+    $language_price = isset($language_prices[$language]) ? floatval($language_prices[$language]) : 0;
+    
+    // Discount calculation (same as frontend)
+    $discount_type = get_post_meta($variation_id, '_discount_type', true);
+    $tour_discount = floatval(get_post_meta($variation_id, '_tour_discount', true) ?: 0);
+    $date_wise_discounts = get_post_meta($variation_id, '_date_wise_discounts', true) ?: array();
+    
+    $discount_percent = 0;
+    // ... discount logic same as frontend
+    
+    // Price calculation
+    $total_price = 0;
+    $calculation_html = '<div class="price-breakdown">';
+    
+    if ($is_private) {
+        $total_count = $adult_count + $child_count;
+        $multiplier = ceil($total_count / $private_count);
+        
+        $base_price = $variation->get_price();
+        $vehicle_price = $base_price * $multiplier;
+        
+        $total_price = $vehicle_price + $language_price + 
+                      ($adult_count * $adult_price) + 
+                      ($child_count * $child_price) + 
+                      ($infant_count * $baby_price);
+        
+        $calculation_html .= "
+            <p><strong>Vehicle(s):</strong> {$multiplier} × " . wc_price($base_price) . " = " . wc_price($vehicle_price) . "</p>
+            <p><strong>Adults:</strong> {$adult_count} × " . wc_price($adult_price) . " = " . wc_price($adult_count * $adult_price) . "</p>
+            <p><strong>Children:</strong> {$child_count} × " . wc_price($child_price) . " = " . wc_price($child_count * $child_price) . "</p>
+        ";
+    } else {
+        $total_price = ($adult_count * $adult_price) + 
+                      ($child_count * $child_price) + 
+                      ($infant_count * $baby_price) + 
+                      $language_price;
+        
+        $calculation_html .= "
+            <p><strong>Adults:</strong> {$adult_count} × " . wc_price($adult_price) . " = " . wc_price($adult_count * $adult_price) . "</p>
+            <p><strong>Children:</strong> {$child_count} × " . wc_price($child_price) . " = " . wc_price($child_count * $child_price) . "</p>
+        ";
+    }
+    
+    if ($language_price > 0) {
+        $calculation_html .= "<p><strong>Language Guide:</strong> " . wc_price($language_price) . "</p>";
+    }
+    
+    if ($infant_count > 0) {
+        $calculation_html .= "<p><strong>Infants:</strong> {$infant_count} × " . wc_price($baby_price) . " = " . wc_price($infant_count * $baby_price) . "</p>";
+    }
+    
+    // Apply discount
+    $discounted_price = $total_price;
+    if ($discount_percent > 0) {
+        $discount_amount = $total_price * ($discount_percent / 100);
+        $discounted_price = $total_price - $discount_amount;
+        
+        $calculation_html .= "
+            <p><strong>Discount:</strong> -{$discount_percent}% (" . wc_price($discount_amount) . ")</p>
+            <hr>
+            <p><strong>Subtotal:</strong> " . wc_price($total_price) . "</p>
+            <p><strong>Final Total:</strong> " . wc_price($discounted_price) . "</p>
+        ";
+    } else {
+        $calculation_html .= "
+            <hr>
+            <p><strong>Total:</strong> " . wc_price($total_price) . "</p>
+        ";
+    }
+    
+    $calculation_html .= '</div>';
+    
+    wp_send_json_success(array(
+        'calculation_html' => $calculation_html,
+        'final_price' => $discounted_price
+    ));
+}
+
+
