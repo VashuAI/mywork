@@ -1,0 +1,799 @@
+<?php
+// admin/admin-booking-creator.php
+
+/**
+ * Admin Booking Creator
+ * Allows admin to manually create bookings
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+class AdminBookingCreator {
+    
+    public function __construct() {
+        add_action('admin_menu', array($this, 'add_admin_menu'));
+        add_action('admin_init', array($this, 'handle_booking_creation'));
+        add_action('wp_ajax_get_product_variations', array($this, 'get_product_variations_ajax'));
+        add_action('wp_ajax_get_variation_details', array($this, 'get_variation_details_ajax'));
+        add_action('wp_ajax_search_customers_admin', array($this, 'search_customers_admin_ajax'));
+        add_action('wp_ajax_check_customer_exists', array($this, 'check_customer_exists_ajax'));
+    }
+    
+    public function add_admin_menu() {
+        add_menu_page(
+            'Create Booking',              // Page title
+            'Create Booking',              // Menu title
+            'manage_woocommerce',          // Capability
+            'admin-booking-creator',       // Menu slug
+            array($this, 'booking_creator_page'), // Callback
+            'dashicons-calendar-alt',      // Icon
+            55                             // Position
+        );
+    }
+    
+    public function booking_creator_page() {
+        ?>
+        <div class="wrap">
+            <h1 style="margin-bottom: 20px;">Create New Booking</h1>
+            
+            <div style="background: white; padding: 20px; border-radius: 5px; border: 1px solid #ccd0d4;">
+                <form method="post" id="admin-booking-form">
+                    <?php wp_nonce_field('admin_create_booking', 'booking_nonce'); ?>
+                    
+                    <!-- Customer Selection -->
+                    <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
+                        <h3 style="color: #2271b1; margin-bottom: 15px; border-bottom: 2px solid #2271b1; padding-bottom: 10px;">Customer Information</h3>
+                        
+                        <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                            <div style="flex: 6;">
+                                <label for="customer_id" style="display: block; margin-bottom: 5px; font-weight: bold;">Select Customer:</label>
+                                <select id="customer_id" name="customer_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="">Select Customer</option>
+                                    <?php
+                                    // Get all customers
+                                    $customers = get_users(array(
+                                        'role__in' => array('customer', 'subscriber'),
+                                        'number' => 100,
+                                        'orderby' => 'display_name',
+                                        'order' => 'ASC'
+                                    ));
+                                    
+                                    foreach ($customers as $customer) {
+                                        $customer_name = $customer->display_name . ' (' . $customer->user_email . ')';
+                                        echo '<option value="' . $customer->ID . '">' . esc_html($customer_name) . '</option>';
+                                    }
+                                    ?>
+                                </select>
+                                <p style="color: #666; font-size: 12px; margin-top: 5px;">Can't find customer? <a href="<?php echo admin_url('user-new.php'); ?>" target="_blank">Create New User</a></p>
+                            </div>
+                            
+                            <div style="flex: 6;">
+                                <label style="display: block; margin-bottom: 5px; font-weight: bold;">Quick Customer Search:</label>
+                                <input type="text" id="customer_search" placeholder="Type customer name or email..." style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                <div id="customer_search_results" style="border: 1px solid #ddd; max-height: 150px; overflow-y: auto; display: none; margin-top: 5px; background: white;"></div>
+                            </div>
+                        </div>
+                        
+                        <div style="margin-top: 15px;">
+                            <button type="button" class="button" id="toggle-new-customer" style="background: #2271b1; color: white; border: none; padding: 8px 15px; border-radius: 3px; cursor: pointer;">+ Create New Customer</button>
+                        </div>
+                        
+                        <div id="new-customer-fields" style="display: none; margin-top: 15px; padding: 15px; background: #f9f9f9; border-radius: 5px;">
+                            <h4 style="margin-top: 0; color: #2271b1;">New Customer Details</h4>
+                            <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                                <div style="flex: 6;">
+                                    <input type="text" name="new_customer_first_name" placeholder="First Name *" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+                                </div>
+                                <div style="flex: 6;">
+                                    <input type="text" name="new_customer_last_name" placeholder="Last Name *" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+                                </div>
+                            </div>
+                            <div style="display: flex; gap: 15px; margin-top: 10px;">
+                                <div style="flex: 6;">
+                                    <input type="email" name="new_customer_email" placeholder="Email Address *" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" required>
+                                </div>
+                                <div style="flex: 6;">
+                                    <input type="tel" name="new_customer_phone" placeholder="Phone Number" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                </div>
+                            </div>
+                            <div style="margin-top: 10px;">
+                                <button type="button" id="verify-customer" class="button" style="background: #727272; color: white; border: none; padding: 8px 15px; border-radius: 3px; cursor: pointer;">Check if customer exists</button>
+                                <span id="customer-check-result" style="margin-left: 10px;"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Product Selection -->
+                    <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
+                        <h3 style="color: #2271b1; margin-bottom: 15px; border-bottom: 2px solid #2271b1; padding-bottom: 10px;">Tour Selection</h3>
+                        <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                            <div style="flex: 6;">
+                                <label for="product_select" style="display: block; margin-bottom: 5px; font-weight: bold;">Select Tour:</label>
+                                <select id="product_select" name="product_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="">Select a tour</option>
+                                    <?php
+                                    $products = wc_get_products(array(
+                                        'type' => array('simple', 'variable'),
+                                        'limit' => -1,
+                                        'status' => 'publish'
+                                    ));
+                                    
+                                    foreach ($products as $product) {
+                                        echo '<option value="' . $product->get_id() . '">' . $product->get_name() . '</option>';
+                                    }
+                                    ?>
+                                </select>
+                            </div>
+                            <div style="flex: 6;">
+                                <label for="variation_select" style="display: block; margin-bottom: 5px; font-weight: bold;">Tour Variation:</label>
+                                <select id="variation_select" name="variation_id" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" disabled>
+                                    <option value="">Select variation</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Variation Details (Dynamic) -->
+                    <div id="variation-details" style="display: none; margin-top: 20px; padding: 15px; background: #f9f9f9; border-radius: 5px;">
+                        <!-- Dynamic content from AJAX -->
+                    </div>
+                    
+                    <!-- Booking Details -->
+                    <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
+                        <h3 style="color: #2271b1; margin-bottom: 15px; border-bottom: 2px solid #2271b1; padding-bottom: 10px;">Booking Details</h3>
+                        <div style="display: flex; gap: 15px; margin-bottom: 10px;">
+                            <div style="flex: 4;">
+                                <label for="adult_count" style="display: block; margin-bottom: 5px; font-weight: bold;">Adults:</label>
+                                <input type="number" id="adult_count" name="adult_count" value="1" min="1" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div style="flex: 4;">
+                                <label for="child_count" style="display: block; margin-bottom: 5px; font-weight: bold;">Children:</label>
+                                <input type="number" id="child_count" name="child_count" value="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div style="flex: 4;">
+                                <label for="infant_count" style="display: block; margin-bottom: 5px; font-weight: bold;">Infants:</label>
+                                <input type="number" id="infant_count" name="infant_count" value="0" min="0" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 15px; margin-top: 15px;">
+                            <div style="flex: 6;">
+                                <label for="booking_date" style="display: block; margin-bottom: 5px; font-weight: bold;">Booking Date:</label>
+                                <input type="date" id="booking_date" name="booking_date" value="<?php echo date('Y-m-d'); ?>" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                            </div>
+                            <div style="flex: 6;">
+                                <label for="time_slot" style="display: block; margin-bottom: 5px; font-weight: bold;">Time Slot:</label>
+                                <select id="time_slot" name="time_slot" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" disabled>
+                                    <option value="">Select time slot</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div style="display: flex; gap: 15px; margin-top: 15px;">
+                            <div style="flex: 6;">
+                                <label for="language" style="display: block; margin-bottom: 5px; font-weight: bold;">Language:</label>
+                                <select id="language" name="language" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" disabled>
+                                    <option value="">Select language</option>
+                                </select>
+                            </div>
+                            <div style="flex: 6;">
+                                <label for="booking_status" style="display: block; margin-bottom: 5px; font-weight: bold;">Booking Status:</label>
+                                <select id="booking_status" name="booking_status" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                                    <option value="pending">Pending</option>
+                                    <option value="confirmed">Confirmed</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="cancelled">Cancelled</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Price Calculation -->
+                    <div style="margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #ddd;">
+                        <h3 style="color: #2271b1; margin-bottom: 15px; border-bottom: 2px solid #2271b1; padding-bottom: 10px;">Price Calculation</h3>
+                        <div id="price-calculation" style="background: white; padding: 15px; border-radius: 5px; border: 1px solid #ddd;">
+                            <p>Select a tour variation to see price calculation</p>
+                        </div>
+                        
+                        <div style="display: flex; gap: 15px; margin-top: 15px;">
+                            <div style="flex: 6;">
+                                <label for="final_price" style="display: block; margin-bottom: 5px; font-weight: bold;">Final Price:</label>
+                                <input type="number" id="final_price" name="final_price" step="0.01" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px;" readonly>
+                            </div>
+                            <div style="flex: 6;">
+                                <label for="special_notes" style="display: block; margin-bottom: 5px; font-weight: bold;">Special Notes:</label>
+                                <textarea id="special_notes" name="special_notes" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; height: 80px;" placeholder="Any special instructions..."></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div style="margin-top: 30px;">
+                        <button type="submit" name="create_booking" class="button button-primary" style="background: #2271b1; color: white; border: none; padding: 12px 25px; border-radius: 3px; cursor: pointer; font-size: 14px; margin-right: 10px;">Create Booking</button>
+                        <button type="button" id="calculate-price" class="button" style="background: #727272; color: white; border: none; padding: 12px 25px; border-radius: 3px; cursor: pointer; font-size: 14px;">Calculate Price</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <script type="text/javascript">
+        jQuery(document).ready(function($) {
+            // Toggle new customer fields
+            $('#toggle-new-customer').click(function() {
+                $('#new-customer-fields').slideToggle();
+            });
+            
+            // Customer search functionality
+            $('#customer_search').on('input', function() {
+                var searchTerm = $(this).val();
+                if (searchTerm.length < 2) {
+                    $('#customer_search_results').hide();
+                    return;
+                }
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'search_customers_admin',
+                        search_term: searchTerm
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            var results = response.data;
+                            var html = '';
+                            
+                            if (results.length > 0) {
+                                results.forEach(function(customer) {
+                                    html += '<div class="customer-result" data-id="' + customer.ID + '" style="padding: 8px; border-bottom: 1px solid #eee; cursor: pointer; background: white;">';
+                                    html += '<strong style="display: block;">' + customer.display_name + '</strong>';
+                                    html += '<small style="color: #666;">' + customer.user_email + '</small>';
+                                    html += '</div>';
+                                });
+                            } else {
+                                html = '<div style="padding: 8px; color: #666; text-align: center;">No customers found</div>';
+                            }
+                            
+                            $('#customer_search_results').html(html).show();
+                        }
+                    }
+                });
+            });
+            
+            // Select customer from search results
+            $(document).on('click', '.customer-result', function() {
+                var customerId = $(this).data('id');
+                var customerName = $(this).find('strong').text();
+                var customerEmail = $(this).find('small').text();
+                
+                $('#customer_id').val(customerId);
+                $('#customer_search').val(customerName + ' (' + customerEmail + ')');
+                $('#customer_search_results').hide();
+                
+                // Hide new customer fields if open
+                $('#new-customer-fields').hide();
+            });
+            
+            // Verify if customer email already exists
+            $('#verify-customer').click(function() {
+                var email = $('input[name="new_customer_email"]').val();
+                if (!email) {
+                    alert('Please enter email address');
+                    return;
+                }
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'check_customer_exists',
+                        email: email
+                    },
+                    success: function(response) {
+                        var resultSpan = $('#customer-check-result');
+                        if (response.exists) {
+                            resultSpan.html('<span style="color: red; font-weight: bold;">Customer already exists! ID: ' + response.customer_id + '</span>');
+                        } else {
+                            resultSpan.html('<span style="color: green; font-weight: bold;">Email available for new customer</span>');
+                        }
+                    }
+                });
+            });
+            
+            // Hide search results when clicking outside
+            $(document).click(function(e) {
+                if (!$(e.target).closest('#customer_search, #customer_search_results').length) {
+                    $('#customer_search_results').hide();
+                }
+            });
+            
+            // Product selection change
+            $('#product_select').change(function() {
+                var productId = $(this).val();
+                if (productId) {
+                    $('#variation_select').prop('disabled', false);
+                    
+                    // Get variations via AJAX
+                    $.ajax({
+                        url: ajaxurl,
+                        type: 'POST',
+                        data: {
+                            action: 'get_product_variations',
+                            product_id: productId
+                        },
+                        success: function(response) {
+                            $('#variation_select').html(response);
+                        }
+                    });
+                } else {
+                    $('#variation_select').prop('disabled', true).html('<option value="">Select variation</option>');
+                    $('#variation-details').hide();
+                }
+            });
+            
+            // Variation selection change
+            $('#variation_select').change(function() {
+                var variationId = $(this).val();
+                if (variationId) {
+                    // Get variation details via AJAX
+                    $.ajax({
+                        url: ajaxurl,
+                        type: 'POST',
+                        data: {
+                            action: 'get_variation_details',
+                            variation_id: variationId,
+                            product_id: $('#product_select').val()
+                        },
+                        success: function(response) {
+                            $('#variation-details').html(response.data.details).show();
+                            $('#time_slot').html(response.data.time_slots).prop('disabled', false);
+                            $('#language').html(response.data.languages).prop('disabled', false);
+                            calculatePrice();
+                        }
+                    });
+                } else {
+                    $('#variation-details').hide();
+                    $('#time_slot, #language').prop('disabled', true);
+                }
+            });
+            
+            // Calculate price when participant counts change
+            $('#adult_count, #child_count, #infant_count, #booking_date, #time_slot, #language').change(function() {
+                calculatePrice();
+            });
+            
+            // Manual price calculation
+            $('#calculate-price').click(function() {
+                calculatePrice();
+            });
+            
+            function calculatePrice() {
+                var variationId = $('#variation_select').val();
+                var adultCount = parseInt($('#adult_count').val()) || 0;
+                var childCount = parseInt($('#child_count').val()) || 0;
+                var infantCount = parseInt($('#infant_count').val()) || 0;
+                var bookingDate = $('#booking_date').val();
+                var language = $('#language').val();
+                
+                if (!variationId) return;
+                
+                $.ajax({
+                    url: ajaxurl,
+                    type: 'POST',
+                    data: {
+                        action: 'calculate_booking_price',
+                        variation_id: variationId,
+                        adult_count: adultCount,
+                        child_count: childCount,
+                        infant_count: infantCount,
+                        booking_date: bookingDate,
+                        language: language
+                    },
+                    success: function(response) {
+                        if (response.success) {
+                            $('#price-calculation').html(response.data.calculation_html);
+                            $('#final_price').val(response.data.final_price);
+                        }
+                    }
+                });
+            }
+        });
+        </script>
+        <?php
+    }
+    
+    public function get_product_variations_ajax() {
+        $product_id = intval($_POST['product_id']);
+        $product = wc_get_product($product_id);
+        
+        if (!$product) {
+            wp_die();
+        }
+        
+        $html = '<option value="">Select variation</option>';
+        
+        if ($product->is_type('variable')) {
+            $variations = $product->get_available_variations();
+            foreach ($variations as $variation) {
+                $variation_obj = wc_get_product($variation['variation_id']);
+                $attributes = $variation_obj->get_attributes();
+                $variation_name = implode(', ', array_values($attributes));
+                
+                $html .= '<option value="' . $variation['variation_id'] . '">' . $variation_name . '</option>';
+            }
+        } else {
+            // Simple product
+            $html .= '<option value="' . $product_id . '">Standard</option>';
+        }
+        
+        echo $html;
+        wp_die();
+    }
+    
+    public function get_variation_details_ajax() {
+        $variation_id = intval($_POST['variation_id']);
+        $product_id = intval($_POST['product_id']);
+        
+        $variation = wc_get_product($variation_id);
+        $product = wc_get_product($product_id);
+        
+        $response = array(
+            'details' => '',
+            'time_slots' => '',
+            'languages' => ''
+        );
+        
+        if ($variation) {
+            // Variation details
+            $adult_price = get_post_meta($variation_id, '_adult_price', true) ?: 0;
+            $child_price = get_post_meta($variation_id, '_child_price', true) ?: 0;
+            $baby_price = get_post_meta($variation_id, '_baby_price', true) ?: 0;
+            $is_private = get_post_meta($variation_id, '_private', true) === 'yes';
+            $private_count = get_post_meta($variation_id, '_private_count', true) ?: 6;
+            
+            $response['details'] = '
+                <h4 style="margin-top: 0; color: #2271b1;">Variation Details</h4>
+                <div style="display: flex; gap: 15px;">
+                    <div style="flex: 6;">
+                        <strong>Type:</strong> ' . ($is_private ? 'Private' : 'Shared') . '<br>
+                        <strong>Adult Price:</strong> ' . wc_price($adult_price) . '<br>
+                        <strong>Child Price:</strong> ' . wc_price($child_price) . '
+                    </div>
+                    <div style="flex: 6;">
+                        <strong>Infant Price:</strong> ' . wc_price($baby_price) . '<br>
+                        ' . ($is_private ? '<strong>Private Group Size:</strong> ' . $private_count . '' : '') . '
+                    </div>
+                </div>
+            ';
+            
+            // Time slots
+            $time_slots = get_post_meta($variation_id, '_time_set', true);
+            if ($time_slots) {
+                $time_slots = explode("\n", $time_slots);
+                $time_options = '<option value="">Select time slot</option>';
+                foreach ($time_slots as $slot) {
+                    $slot = trim($slot);
+                    if ($slot) {
+                        $time_options .= '<option value="' . esc_attr($slot) . '">' . esc_html($slot) . '</option>';
+                    }
+                }
+                $response['time_slots'] = $time_options;
+            }
+            
+            // Languages
+            $languages = get_post_meta($product_id, '_product_languages', true) ?: array();
+            $language_prices = get_post_meta($product_id, '_product_language_prices', true) ?: array();
+            
+            $language_options = '<option value="">Select language</option>';
+            foreach ($languages as $language) {
+                $extra_price = isset($language_prices[$language]) ? ' (+' . wc_price($language_prices[$language]) . ')' : '';
+                $language_options .= '<option value="' . esc_attr($language) . '">' . esc_html($language) . $extra_price . '</option>';
+            }
+            $response['languages'] = $language_options;
+        }
+        
+        wp_send_json_success($response);
+    }
+    
+    // AJAX handler for customer search
+    public function search_customers_admin_ajax() {
+        $search_term = sanitize_text_field($_POST['search_term']);
+        
+        $customers = get_users(array(
+            'role__in' => array('customer', 'subscriber'),
+            'search' => '*' . $search_term . '*',
+            'search_columns' => array('user_login', 'user_email', 'display_name', 'first_name', 'last_name'),
+            'number' => 10,
+            'orderby' => 'display_name',
+            'order' => 'ASC'
+        ));
+        
+        $customer_data = array();
+        foreach ($customers as $customer) {
+            $customer_data[] = array(
+                'ID' => $customer->ID,
+                'display_name' => $customer->display_name,
+                'user_email' => $customer->user_email
+            );
+        }
+        
+        wp_send_json_success($customer_data);
+    }
+    
+    // AJAX handler for customer existence check
+    public function check_customer_exists_ajax() {
+        $email = sanitize_email($_POST['email']);
+        
+        $customer = get_user_by('email', $email);
+        
+        if ($customer) {
+            wp_send_json_success(array(
+                'exists' => true,
+                'customer_id' => $customer->ID
+            ));
+        } else {
+            wp_send_json_success(array(
+                'exists' => false
+            ));
+        }
+    }
+    
+    public function handle_booking_creation() {
+        if (!isset($_POST['create_booking']) || !wp_verify_nonce($_POST['booking_nonce'], 'admin_create_booking')) {
+            return;
+        }
+        
+        try {
+            // Validate data
+            $required_fields = array(
+                'product_id',
+                'variation_id', 
+                'adult_count',
+                'booking_date',
+                'time_slot',
+                'language'
+            );
+            
+            foreach ($required_fields as $field) {
+                if (empty($_POST[$field])) {
+                    throw new Exception("Please fill in all required fields: " . $field);
+                }
+            }
+            
+            // Get or create customer
+            $customer_id = $this->get_or_create_customer();
+            
+            // Create order
+            $order = wc_create_order(array(
+                'customer_id' => $customer_id,
+                'status' => sanitize_text_field($_POST['booking_status'])
+            ));
+            
+            if (is_wp_error($order)) {
+                throw new Exception('Could not create order: ' . $order->get_error_message());
+            }
+            
+            // Add product to order
+            $product_id = intval($_POST['product_id']);
+            $variation_id = intval($_POST['variation_id']);
+            $quantity = 1;
+            
+            // Calculate final price
+            $final_price = floatval($_POST['final_price']);
+            
+            // Add item to order
+            $product = wc_get_product($variation_id ?: $product_id);
+            $item_id = $order->add_product($product, $quantity, array(
+                'subtotal' => $final_price,
+                'total' => $final_price
+            ));
+            
+            // Add booking meta data
+            wc_add_order_item_meta($item_id, 'Adult Count', sanitize_text_field($_POST['adult_count']));
+            wc_add_order_item_meta($item_id, 'Child Count', sanitize_text_field($_POST['child_count']));
+            wc_add_order_item_meta($item_id, 'Infant Count', sanitize_text_field($_POST['infant_count']));
+            wc_add_order_item_meta($item_id, 'Booking Date', sanitize_text_field($_POST['booking_date']));
+            wc_add_order_item_meta($item_id, 'Time Slot', sanitize_text_field($_POST['time_slot']));
+            wc_add_order_item_meta($item_id, 'Language', sanitize_text_field($_POST['language']));
+            wc_add_order_item_meta($item_id, 'Calculated Price', $final_price);
+            
+            // Add order notes
+            if (!empty($_POST['special_notes'])) {
+                $order->add_order_note('Special instructions: ' . sanitize_textarea_field($_POST['special_notes']));
+            }
+            
+            $order->add_order_note('Booking created manually by admin');
+            
+            // Calculate totals and save
+            $order->calculate_totals();
+            $order->save();
+            
+            // Success message
+            add_action('admin_notices', function() use ($order) {
+                echo '<div class="notice notice-success is-dismissible">
+                    <p>Booking created successfully! Order #' . $order->get_id() . '</p>
+                    <p><a href="' . admin_url('post.php?post=' . $order->get_id() . '&action=edit') . '" class="button">View Order</a></p>
+                </div>';
+            });
+            
+        } catch (Exception $e) {
+            add_action('admin_notices', function() use ($e) {
+                echo '<div class="notice notice-error is-dismissible">
+                    <p>Error creating booking: ' . $e->getMessage() . '</p>
+                </div>';
+            });
+        }
+    }
+
+    private function get_or_create_customer() {
+        // If existing customer selected from dropdown
+        if (!empty($_POST['customer_id'])) {
+            $customer_id = intval($_POST['customer_id']);
+            $customer = get_user_by('ID', $customer_id);
+            
+            if ($customer) {
+                return $customer_id;
+            }
+        }
+        
+        // Create new customer
+        if (!empty($_POST['new_customer_email'])) {
+            $email = sanitize_email($_POST['new_customer_email']);
+            $first_name = sanitize_text_field($_POST['new_customer_first_name']);
+            $last_name = sanitize_text_field($_POST['new_customer_last_name']);
+            $phone = sanitize_text_field($_POST['new_customer_phone']);
+            
+            // Check if customer already exists
+            $existing_customer = get_user_by('email', $email);
+            if ($existing_customer) {
+                return $existing_customer->ID;
+            }
+            
+            // Create new user
+            $username = $email;
+            $password = wp_generate_password(12, true, true);
+            
+            $user_id = wp_create_user($username, $password, $email);
+            
+            if (is_wp_error($user_id)) {
+                throw new Exception('Could not create customer: ' . $user_id->get_error_message());
+            }
+            
+            // Update user details
+            wp_update_user(array(
+                'ID' => $user_id,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'display_name' => $first_name . ' ' . $last_name,
+                'role' => 'customer'
+            ));
+            
+            // Add customer meta
+            update_user_meta($user_id, 'billing_phone', $phone);
+            update_user_meta($user_id, 'billing_first_name', $first_name);
+            update_user_meta($user_id, 'billing_last_name', $last_name);
+            update_user_meta($user_id, 'billing_email', $email);
+            
+            return $user_id;
+        }
+        
+        throw new Exception('Please select an existing customer or create a new one');
+    }
+}
+
+new AdminBookingCreator();
+
+// Price calculation ke liye AJAX handler
+add_action('wp_ajax_calculate_booking_price', 'calculate_booking_price_ajax');
+
+function calculate_booking_price_ajax() {
+    $variation_id = intval($_POST['variation_id']);
+    $adult_count = intval($_POST['adult_count']);
+    $child_count = intval($_POST['child_count']); 
+    $infant_count = intval($_POST['infant_count']);
+    $booking_date = sanitize_text_field($_POST['booking_date']);
+    $language = sanitize_text_field($_POST['language']);
+    
+    $variation = wc_get_product($variation_id);
+    $product_id = $variation->get_parent_id();
+    
+    // Same pricing logic as frontend
+    $adult_price = get_post_meta($variation_id, '_adult_price', true) ?: 0;
+    $child_price = get_post_meta($variation_id, '_child_price', true) ?: 0;
+    $baby_price = get_post_meta($variation_id, '_baby_price', true) ?: 0;
+    $is_private = get_post_meta($variation_id, '_private', true) === 'yes';
+    $private_count = get_post_meta($variation_id, '_private_count', true) ?: 6;
+    
+    // Language price
+    $language_prices = get_post_meta($product_id, '_product_language_prices', true) ?: array();
+    $language_price = isset($language_prices[$language]) ? floatval($language_prices[$language]) : 0;
+    
+    // Discount calculation (same as frontend)
+    $discount_type = get_post_meta($variation_id, '_discount_type', true);
+    $tour_discount = floatval(get_post_meta($variation_id, '_tour_discount', true) ?: 0);
+    $date_wise_discounts = get_post_meta($variation_id, '_date_wise_discounts', true) ?: array();
+    
+    $discount_percent = 0;
+    if ($discount_type === 'direct' && $tour_discount > 0) {
+        $discount_percent = $tour_discount;
+    } elseif ($discount_type === 'date_wise' && is_array($date_wise_discounts)) {
+        foreach ($date_wise_discounts as $discount) {
+            $start = $discount['start_date'] ?? '';
+            $end = $discount['end_date'] ?? '';
+            $discount_value = floatval($discount['discount'] ?? 0);
+            
+            if ($booking_date >= $start && $booking_date <= $end) {
+                $discount_percent = $discount_value;
+                break;
+            }
+        }
+    }
+    
+    // Price calculation
+    $total_price = 0;
+    $calculation_html = '<div style="background: #f8f9fa; padding: 15px; border-radius: 5px; border-left: 4px solid #2271b1;">';
+    
+    if ($is_private) {
+        $total_count = $adult_count + $child_count;
+        $multiplier = ceil($total_count / $private_count);
+        
+        $base_price = $variation->get_price();
+        $vehicle_price = $base_price * $multiplier;
+        
+        $total_price = $vehicle_price + $language_price + 
+                      ($adult_count * $adult_price) + 
+                      ($child_count * $child_price) + 
+                      ($infant_count * $baby_price);
+        
+        $calculation_html .= "
+            <p style=\"margin: 5px 0;\"><strong>Vehicle(s):</strong> {$multiplier} × " . wc_price($base_price) . " = " . wc_price($vehicle_price) . "</p>
+            <p style=\"margin: 5px 0;\"><strong>Adults:</strong> {$adult_count} × " . wc_price($adult_price) . " = " . wc_price($adult_count * $adult_price) . "</p>
+            <p style=\"margin: 5px 0;\"><strong>Children:</strong> {$child_count} × " . wc_price($child_price) . " = " . wc_price($child_count * $child_price) . "</p>
+        ";
+    } else {
+        $total_price = ($adult_count * $adult_price) + 
+                      ($child_count * $child_price) + 
+                      ($infant_count * $baby_price) + 
+                      $language_price;
+        
+        $calculation_html .= "
+            <p style=\"margin: 5px 0;\"><strong>Adults:</strong> {$adult_count} × " . wc_price($adult_price) . " = " . wc_price($adult_count * $adult_price) . "</p>
+            <p style=\"margin: 5px 0;\"><strong>Children:</strong> {$child_count} × " . wc_price($child_price) . " = " . wc_price($child_count * $child_price) . "</p>
+        ";
+    }
+    
+    if ($language_price > 0) {
+        $calculation_html .= "<p style=\"margin: 5px 0;\"><strong>Language Guide:</strong> " . wc_price($language_price) . "</p>";
+    }
+    
+    if ($infant_count > 0) {
+        $calculation_html .= "<p style=\"margin: 5px 0;\"><strong>Infants:</strong> {$infant_count} × " . wc_price($baby_price) . " = " . wc_price($infant_count * $baby_price) . "</p>";
+    }
+    
+    // Apply discount
+    $discounted_price = $total_price;
+    if ($discount_percent > 0) {
+        $discount_amount = $total_price * ($discount_percent / 100);
+        $discounted_price = $total_price - $discount_amount;
+        
+        $calculation_html .= "
+            <p style=\"margin: 5px 0;\"><strong>Discount:</strong> -{$discount_percent}% (" . wc_price($discount_amount) . ")</p>
+            <hr style=\"margin: 10px 0; border: none; border-top: 1px solid #ddd;\">
+            <p style=\"margin: 5px 0;\"><strong>Subtotal:</strong> " . wc_price($total_price) . "</p>
+            <p style=\"margin: 5px 0; font-size: 16px; font-weight: bold; color: #2271b1;\"><strong>Final Total:</strong> " . wc_price($discounted_price) . "</p>
+        ";
+    } else {
+        $calculation_html .= "
+            <hr style=\"margin: 10px 0; border: none; border-top: 1px solid #ddd;\">
+            <p style=\"margin: 5px 0; font-size: 16px; font-weight: bold; color: #2271b1;\"><strong>Total:</strong> " . wc_price($total_price) . "</p>
+        ";
+    }
+    
+    $calculation_html .= '</div>';
+    
+    wp_send_json_success(array(
+        'calculation_html' => $calculation_html,
+        'final_price' => $discounted_price
+    ));
+}
